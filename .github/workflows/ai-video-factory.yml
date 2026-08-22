@@ -1,0 +1,173 @@
+name: AI Video Factory Free GPU Worker
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/5 * * * *'
+  push:
+    paths:
+      - '.github/workflows/ai-video-factory.yml'
+      - 'kaggle_worker/**'
+      - 'orchestrator/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-video-factory-kaggle-worker
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      SUPABASE_URL: https://czbumgzqbecpfyvebawe.supabase.co
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+      SUPABASE_PUBLISHABLE_KEY: sb_publishable_Fly1NLAmfTf7X8MY898_7g_E9fBh6uM
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install orchestrator tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install --upgrade kaggle requests
+          kaggle --version
+
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${KAGGLE_API_TOKEN:-}" || (echo 'Missing KAGGLE_API_TOKEN' && exit 1)
+          test -n "${SUPABASE_SECRET_KEY:-}" || (echo 'Missing SUPABASE_SECRET_KEY' && exit 1)
+
+      - name: Claim next queued GPU project
+        id: claim
+        run: python orchestrator/claim_job.py
+
+      - name: No job available
+        if: steps.claim.outputs.found != 'true'
+        run: echo 'Queue is empty. Nothing to generate on this run.'
+
+      - name: Build private Kaggle job source
+        if: steps.claim.outputs.found == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/ai-video-kernel
+          mkdir -p /tmp/ai-video-kernel
+          cp kaggle_worker/kernel_entry.py /tmp/ai-video-kernel/kernel_entry.py
+          cp kaggle_worker/kernel-metadata.json /tmp/ai-video-kernel/kernel-metadata.json
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          entry = Path('/tmp/ai-video-kernel/kernel_entry.py')
+          source = entry.read_text(encoding='utf-8')
+          job_text = Path('kaggle_worker/job.json').read_text(encoding='utf-8')
+          marker = '"__AI_VIDEO_FACTORY_JOB_JSON__"'
+          if marker not in source:
+              raise RuntimeError('Kaggle job marker missing')
+          source = source.replace(marker, json.dumps(job_text), 1)
+          entry.write_text(source, encoding='utf-8')
+          print('Embedded project payload into private Kaggle entrypoint.')
+          PY
+
+      - name: Launch free Kaggle T4 generation
+        if: steps.claim.outputs.found == 'true'
+        id: launch
+        shell: bash
+        run: |
+          set -euo pipefail
+          REF='ezzsoliman/ai-video-factory-worker'
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          kaggle kernels push -p /tmp/ai-video-kernel --accelerator NvidiaTeslaT4 -t 7200
+
+      - name: Wait for real video generation
+        if: steps.claim.outputs.found == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          REF='${{ steps.launch.outputs.ref }}'
+
+          for i in $(seq 1 180); do
+            STATUS=$(kaggle kernels status "$REF" 2>&1 || true)
+            echo "[$i/180] $STATUS"
+            LOWER=$(printf '%s' "$STATUS" | tr '[:upper:]' '[:lower:]')
+
+            if printf '%s' "$LOWER" | grep -Eq 'complete|completed'; then
+              exit 0
+            fi
+
+            if printf '%s' "$LOWER" | grep -Eq 'error|failed|cancelled'; then
+              echo 'Kaggle generation failed.'
+              exit 1
+            fi
+
+            sleep 30
+          done
+
+          echo 'Timed out waiting for Kaggle generation.'
+          exit 1
+
+      - name: Download generated video outputs
+        if: steps.claim.outputs.found == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          REF='${{ steps.launch.outputs.ref }}'
+          rm -rf /tmp/kaggle-output
+          mkdir -p /tmp/kaggle-output
+          kaggle kernels output "$REF" \
+            -p /tmp/kaggle-output \
+            -o \
+            --file-pattern '.*(result\.json|final_vertical\.mp4|final_landscape\.mp4|thumbnail\.jpg)$'
+          echo 'Downloaded files:'
+          find /tmp/kaggle-output -maxdepth 2 -type f -printf '%p %k KB\n'
+
+      - name: Upload video to Supabase and mark ready for review
+        if: steps.claim.outputs.found == 'true'
+        env:
+          KAGGLE_OUTPUT_DIR: /tmp/kaggle-output
+        run: python orchestrator/finalize_job.py
+
+      - name: Mark project failed if generation broke
+        if: failure() && steps.claim.outputs.found == 'true'
+        env:
+          PROJECT_ID: ${{ steps.claim.outputs.project_id }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import requests
+
+          url = os.environ['SUPABASE_URL'].rstrip('/')
+          key = os.environ['SUPABASE_SECRET_KEY']
+          project_id = os.environ['PROJECT_ID']
+          headers = {
+              'apikey': key,
+              'Authorization': f'Bearer {key}',
+              'Content-Type': 'application/json',
+              'Prefer': 'return=minimal',
+          }
+          requests.patch(
+              f'{url}/rest/v1/projects?id=eq.{project_id}',
+              headers=headers,
+              json={
+                  'status': 'failed',
+                  'current_stage': 'failed',
+                  'error_message': 'Free Kaggle GPU workflow failed. Open GitHub Actions for the detailed log.'
+              },
+              timeout=30,
+          ).raise_for_status()
+          print(f'Marked {project_id} as failed.')
+          PY
