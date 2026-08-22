@@ -1,7 +1,7 @@
 {
   "id": "ezzsoliman/ai-video-factory-worker",
   "title": "AI Video Factory Worker",
-  "code_file": "run_job.py",
+  "code_file": "kernel_entry.py",
   "language": "python",
   "kernel_type": "script",
   "is_private": true,
