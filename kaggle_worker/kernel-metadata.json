@@ -1,0 +1,15 @@
+{
+  "id": "ezzsoliman/ai-video-factory-worker",
+  "title": "AI Video Factory Worker",
+  "code_file": "run_job.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "machine_shape": "NvidiaTeslaT4",
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": [],
+  "model_sources": []
+}
