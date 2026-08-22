@@ -83,6 +83,7 @@ def delete_project(project_id: str):
 
 
 def mark_cancelled(project_id: str, message: str):
+    now = datetime.now(timezone.utc).isoformat()
     response = requests.patch(
         f"{SUPABASE_URL}/rest/v1/projects?id=eq.{project_id}",
         headers={**JSON_HEADERS, "Prefer": "return=minimal"},
@@ -90,7 +91,8 @@ def mark_cancelled(project_id: str, message: str):
             "status": "cancelled",
             "current_stage": "cancelled",
             "cancel_requested": True,
-            "cancelled_at": datetime.now(timezone.utc).isoformat(),
+            "cancelled_at": now,
+            "finished_at": now,
             "error_message": None,
         },
         timeout=30,
@@ -158,6 +160,8 @@ def main() -> int:
         if not urls.get("preview"):
             urls["preview"] = landscape_url
 
+    finished_at = datetime.now(timezone.utc).isoformat()
+    metadata = result.get("metadata") or {}
     patch = requests.patch(
         f"{SUPABASE_URL}/rest/v1/projects?id=eq.{project_id}",
         headers={**JSON_HEADERS, "Prefer": "return=minimal"},
@@ -168,8 +172,10 @@ def main() -> int:
             "title": result.get("title"),
             "script": result.get("script"),
             "plan": result.get("plan") or {},
-            "result_metadata": result.get("metadata") or {},
+            "result_metadata": metadata,
             "output_urls": urls,
+            "finished_at": finished_at,
+            "estimated_wait_seconds": 0,
             "error_message": None,
         },
         timeout=30,
@@ -184,7 +190,7 @@ def main() -> int:
             "stage": "approval",
             "status": "completed",
             "message": "Real Kaggle GPU render uploaded and ready for review",
-            "metadata": {"output_urls": urls},
+            "metadata": {"output_urls": urls, "runtime_seconds": metadata.get("runtime_seconds")},
         },
         timeout=30,
     ).raise_for_status()
