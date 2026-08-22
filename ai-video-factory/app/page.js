@@ -23,16 +23,15 @@ const pipeline = [
 function stageState(stage, status, itemKey, index) {
   if (status === 'failed' && stage === itemKey) return 'Failed';
   if (status === 'published') return 'Done';
+  if (status === 'ready_for_review') {
+    if (itemKey === 'approval') return 'Ready';
+    if (itemKey === 'publishing') return 'Waiting';
+    return 'Done';
+  }
   if (stage === 'queued') return index === 0 ? 'Next' : 'Waiting';
 
   const currentIndex = pipeline.findIndex(item => item.key === stage);
-  if (currentIndex === -1) {
-    if (status === 'ready_for_review') {
-      if (itemKey === 'approval') return 'Next';
-      return index < 6 ? 'Done' : 'Waiting';
-    }
-    return 'Waiting';
-  }
+  if (currentIndex === -1) return 'Waiting';
 
   if (index < currentIndex) return 'Done';
   if (index === currentIndex) return status === 'queued' ? 'Next' : 'Running';
