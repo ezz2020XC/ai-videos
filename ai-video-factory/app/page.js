@@ -130,7 +130,7 @@ export default function Home() {
   const toggle = key => setPlatforms(p => ({ ...p, [key]: !p[key] }));
 
   return <main className="page"><div className="shell">
-    <div className="top"><div className="brand"><h1>🎬 AI Video Factory</h1><p>Idea → Generate → Review → Approve → Publish</p></div><div className="badge">Implementation v0.2</div></div>
+    <div className="top"><div className="brand"><h1>🎬 AI Video Factory</h1><p>Idea → Generate → Review → Approve → Publish</p></div><div className="badge">Implementation v0.3</div></div>
     <div className="grid">
       <section className="card"><h2>Create video</h2>
         <label>Video idea</label><textarea value={idea} onChange={e=>setIdea(e.target.value)} placeholder="What if scientists discovered advanced technology beneath the pyramids?" />
@@ -147,7 +147,7 @@ export default function Home() {
       </section>
       <aside className="card"><div className="status"><span className="dot"></span>Dashboard online</div><h2 style={{marginTop:18}}>Pipeline</h2><div className="steps">
         {pipeline.map((item,i)=><div className="step" key={item.key}><span>{item.label}</span><span className="value">{stageState(projectStatus.current_stage, projectStatus.status, item.key, i)}</span></div>)}
-      </div><p className="note">Live job status is now connected to Supabase. The next implementation step is the Python/GPU worker that claims queued projects and runs the AI pipeline.</p></aside>
+      </div><p className="note">Worker connected. Live jobs are being claimed from Supabase and the dashboard is tracking their progress. Next: replace the simulated stages with the real AI generation modules.</p></aside>
     </div>
   </div></main>
 }
