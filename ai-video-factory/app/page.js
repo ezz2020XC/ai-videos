@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 const defaultPlatforms = {
   reels: true,
@@ -8,6 +8,36 @@ const defaultPlatforms = {
   shorts: true,
   youtube: false,
 };
+
+const pipeline = [
+  { label: 'AI Director', key: 'ai_director' },
+  { label: 'Voice', key: 'voice' },
+  { label: 'Storyboard', key: 'storyboard' },
+  { label: 'Animation', key: 'animation' },
+  { label: 'Captions', key: 'captions' },
+  { label: 'Full-HD Render', key: 'render' },
+  { label: 'Approval', key: 'approval' },
+  { label: 'Publishing', key: 'publishing' },
+];
+
+function stageState(stage, status, itemKey, index) {
+  if (status === 'failed' && stage === itemKey) return 'Failed';
+  if (status === 'published') return 'Done';
+  if (stage === 'queued') return index === 0 ? 'Next' : 'Waiting';
+
+  const currentIndex = pipeline.findIndex(item => item.key === stage);
+  if (currentIndex === -1) {
+    if (status === 'ready_for_review') {
+      if (itemKey === 'approval') return 'Next';
+      return index < 6 ? 'Done' : 'Waiting';
+    }
+    return 'Waiting';
+  }
+
+  if (index < currentIndex) return 'Done';
+  if (index === currentIndex) return status === 'queued' ? 'Next' : 'Running';
+  return 'Waiting';
+}
 
 export default function Home() {
   const [idea, setIdea] = useState('');
@@ -18,28 +48,89 @@ export default function Home() {
   const [platforms, setPlatforms] = useState(defaultPlatforms);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState('');
+  const [projectId, setProjectId] = useState('');
+  const [projectStatus, setProjectStatus] = useState({
+    status: 'idle',
+    progress: 0,
+    current_stage: 'queued',
+    output_urls: {},
+  });
+
+  useEffect(() => {
+    if (!projectId) return;
+
+    let stopped = false;
+
+    async function refreshStatus() {
+      try {
+        const res = await fetch(`/api/projects/${projectId}`, { cache: 'no-store' });
+        const data = await res.json();
+        if (!res.ok || stopped) return;
+
+        setProjectStatus(data);
+        setResult(
+          `Project ${data.id}\nStatus: ${data.status}\nStage: ${data.current_stage}\nProgress: ${data.progress}%`
+        );
+      } catch (_) {}
+    }
+
+    refreshStatus();
+    const timer = setInterval(refreshStatus, 2500);
+
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [projectId]);
 
   async function generate() {
     if (!idea.trim()) return setResult('Enter a video idea first.');
     setLoading(true);
     setResult('');
+    setProjectId('');
+
     try {
       const res = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ idea, duration:Number(duration), style, voice, quality, platforms }),
+        body: JSON.stringify({
+          idea,
+          duration: Number(duration),
+          style,
+          voice,
+          quality,
+          platforms,
+        }),
       });
+
       const data = await res.json();
-      setResult(`Project ${data.projectId} created.\nStatus: ${data.status}\n\nNext: connect the Python/GPU worker to this API.`);
-    } catch (e) {
+
+      if (!res.ok) {
+        setResult(data?.error || 'Could not create project.');
+        return;
+      }
+
+      setProjectId(data.projectId);
+      setProjectStatus({
+        status: data.status,
+        progress: data.progress ?? 0,
+        current_stage: data.stage || 'queued',
+        output_urls: {},
+      });
+      setResult(
+        `Project ${data.projectId} created.\nStatus: ${data.status}\nStage: ${data.stage || 'queued'}\nProgress: ${data.progress ?? 0}%`
+      );
+    } catch (_) {
       setResult('Could not create project.');
-    } finally { setLoading(false); }
+    } finally {
+      setLoading(false);
+    }
   }
 
-  const toggle = key => setPlatforms(p => ({...p,[key]:!p[key]}));
+  const toggle = key => setPlatforms(p => ({ ...p, [key]: !p[key] }));
 
   return <main className="page"><div className="shell">
-    <div className="top"><div className="brand"><h1>🎬 AI Video Factory</h1><p>Idea → Generate → Review → Approve → Publish</p></div><div className="badge">Implementation v0.1</div></div>
+    <div className="top"><div className="brand"><h1>🎬 AI Video Factory</h1><p>Idea → Generate → Review → Approve → Publish</p></div><div className="badge">Implementation v0.2</div></div>
     <div className="grid">
       <section className="card"><h2>Create video</h2>
         <label>Video idea</label><textarea value={idea} onChange={e=>setIdea(e.target.value)} placeholder="What if scientists discovered advanced technology beneath the pyramids?" />
@@ -55,8 +146,8 @@ export default function Home() {
         {result && <div className="result">{result}</div>}
       </section>
       <aside className="card"><div className="status"><span className="dot"></span>Dashboard online</div><h2 style={{marginTop:18}}>Pipeline</h2><div className="steps">
-        {['AI Director','Voice','Storyboard','Animation','Captions','Full-HD Render','Approval','Publishing'].map((x,i)=><div className="step" key={x}><span>{x}</span><span className="value">{i===0?'Next':'Waiting'}</span></div>)}
-      </div><p className="note">This Vercel app stays lightweight and always available. Heavy AI rendering will run in a separate GPU worker, so the dashboard does not depend on Kaggle or Hugging Face Space uptime.</p></aside>
+        {pipeline.map((item,i)=><div className="step" key={item.key}><span>{item.label}</span><span className="value">{stageState(projectStatus.current_stage, projectStatus.status, item.key, i)}</span></div>)}
+      </div><p className="note">Live job status is now connected to Supabase. The next implementation step is the Python/GPU worker that claims queued projects and runs the AI pipeline.</p></aside>
     </div>
   </div></main>
 }
