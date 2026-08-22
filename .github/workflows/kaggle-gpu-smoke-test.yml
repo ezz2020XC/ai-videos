@@ -1,0 +1,173 @@
+name: Kaggle Free GPU Smoke Test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/kaggle-gpu-smoke-test.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  gpu-smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Kaggle CLI
+        run: |
+          python -m pip install --upgrade pip
+          pip install --upgrade kaggle
+          kaggle --version
+
+      - name: Validate Kaggle token and discover account
+        id: account
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${KAGGLE_API_TOKEN:-}" ]; then
+            echo "KAGGLE_API_TOKEN secret is missing"
+            exit 1
+          fi
+
+          kaggle kernels list -m --page-size 5 -v > /tmp/kernels.csv
+          cat /tmp/kernels.csv
+
+          OWNER=$(python - <<'PY'
+          import csv
+          from pathlib import Path
+          p = Path('/tmp/kernels.csv')
+          rows = list(csv.reader(p.open())) if p.exists() else []
+          owner = ''
+          for row in rows[1:]:
+              if row and '/' in row[0]:
+                  owner = row[0].split('/', 1)[0].strip()
+                  break
+          print(owner)
+          PY
+          )
+
+          if [ -z "$OWNER" ]; then
+            echo "Could not auto-detect the Kaggle username from existing kernels."
+            echo "Create one Kaggle notebook once, or add a repository variable KAGGLE_USERNAME."
+            exit 2
+          fi
+
+          echo "owner=$OWNER" >> "$GITHUB_OUTPUT"
+          echo "Detected Kaggle account: $OWNER"
+
+      - name: Build tiny private GPU test kernel
+        shell: bash
+        run: |
+          set -euo pipefail
+          OWNER='${{ steps.account.outputs.owner }}'
+          mkdir -p /tmp/kaggle-gpu-test
+
+          cat > /tmp/kaggle-gpu-test/gpu_smoke.py <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+          import torch
+
+          def cmd(args):
+              return subprocess.run(args, capture_output=True, text=True).stdout.strip()
+
+          result = {
+              'torch_version': torch.__version__,
+              'cuda_available': torch.cuda.is_available(),
+              'gpu_count': torch.cuda.device_count(),
+              'gpu_name': torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+              'nvidia_smi': cmd(['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv,noheader'])
+          }
+
+          if torch.cuda.is_available():
+              x = torch.randn((1024, 1024), device='cuda')
+              y = x @ x
+              result['cuda_compute_ok'] = bool(torch.isfinite(y).all().item())
+          else:
+              result['cuda_compute_ok'] = False
+
+          out = Path('/kaggle/working/gpu_smoke_result.json')
+          out.write_text(json.dumps(result, indent=2))
+          print(json.dumps(result, indent=2))
+          PY
+
+          python - <<PY
+          import json
+          from pathlib import Path
+          owner = "${OWNER}"
+          metadata = {
+              "id": f"{owner}/ai-video-factory-gpu-smoke-test",
+              "title": "AI Video Factory GPU Smoke Test",
+              "code_file": "gpu_smoke.py",
+              "language": "python",
+              "kernel_type": "script",
+              "is_private": True,
+              "enable_gpu": True,
+              "enable_internet": True,
+              "machine_shape": "NvidiaTeslaT4",
+              "dataset_sources": [],
+              "competition_sources": [],
+              "kernel_sources": [],
+              "model_sources": []
+          }
+          Path('/tmp/kaggle-gpu-test/kernel-metadata.json').write_text(json.dumps(metadata, indent=2))
+          print(json.dumps(metadata, indent=2))
+          PY
+
+      - name: Launch Kaggle T4 run
+        id: launch
+        shell: bash
+        run: |
+          set -euo pipefail
+          OWNER='${{ steps.account.outputs.owner }}'
+          REF="$OWNER/ai-video-factory-gpu-smoke-test"
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          kaggle kernels push -p /tmp/kaggle-gpu-test --accelerator NvidiaTeslaT4 -t 1800
+
+      - name: Wait for Kaggle run
+        shell: bash
+        run: |
+          set -euo pipefail
+          REF='${{ steps.launch.outputs.ref }}'
+
+          for i in $(seq 1 60); do
+            STATUS=$(kaggle kernels status "$REF" 2>&1 || true)
+            echo "[$i/60] $STATUS"
+            LOWER=$(printf '%s' "$STATUS" | tr '[:upper:]' '[:lower:]')
+
+            if printf '%s' "$LOWER" | grep -Eq 'complete|completed'; then
+              exit 0
+            fi
+
+            if printf '%s' "$LOWER" | grep -Eq 'error|failed|cancelled'; then
+              echo "Kaggle kernel failed"
+              exit 1
+            fi
+
+            sleep 30
+          done
+
+          echo "Timed out waiting for Kaggle"
+          exit 1
+
+      - name: Download GPU result
+        shell: bash
+        run: |
+          set -euo pipefail
+          REF='${{ steps.launch.outputs.ref }}'
+          mkdir -p /tmp/kaggle-output
+          kaggle kernels output "$REF" -p /tmp/kaggle-output -o --file-pattern '.*gpu_smoke_result\.json$'
+          echo '--- Kaggle GPU result ---'
+          cat /tmp/kaggle-output/gpu_smoke_result.json
