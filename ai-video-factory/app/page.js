@@ -21,7 +21,7 @@ const pipeline = [
 ];
 
 function stageState(stage, status, itemKey, index) {
-  if (status === 'failed' && stage === itemKey) return 'Failed';
+  if (status === 'failed') return itemKey === 'approval' ? 'Blocked' : (index === 0 ? 'Failed' : 'Waiting');
   if (status === 'published') return 'Done';
   if (status === 'ready_for_review') {
     if (itemKey === 'approval') return 'Ready';
@@ -34,7 +34,7 @@ function stageState(stage, status, itemKey, index) {
   if (currentIndex === -1) return 'Waiting';
 
   if (index < currentIndex) return 'Done';
-  if (index === currentIndex) return status === 'queued' ? 'Next' : 'Running';
+  if (index === currentIndex) return 'Running';
   return 'Waiting';
 }
 
@@ -67,8 +67,9 @@ export default function Home() {
         if (!res.ok || stopped) return;
 
         setProjectStatus(data);
+        const failure = data.error_message ? `\nError: ${data.error_message}` : '';
         setResult(
-          `Project ${data.id}\nStatus: ${data.status}\nStage: ${data.current_stage}\nProgress: ${data.progress}%`
+          `Project ${data.id}\nStatus: ${data.status}\nStage: ${data.current_stage}\nProgress: ${data.progress}%${failure}`
         );
       } catch (_) {}
     }
@@ -87,6 +88,7 @@ export default function Home() {
     setLoading(true);
     setResult('');
     setProjectId('');
+    setProjectStatus({ status: 'idle', progress: 0, current_stage: 'queued', output_urls: {} });
 
     try {
       const res = await fetch('/api/generate', {
@@ -117,7 +119,7 @@ export default function Home() {
         output_urls: {},
       });
       setResult(
-        `Project ${data.projectId} created.\nStatus: ${data.status}\nStage: ${data.stage || 'queued'}\nProgress: ${data.progress ?? 0}%`
+        `Project ${data.projectId} created.\nStatus: waiting for free Kaggle GPU\nStage: queued\nProgress: ${data.progress ?? 0}%`
       );
     } catch (_) {
       setResult('Could not create project.');
@@ -127,9 +129,10 @@ export default function Home() {
   }
 
   const toggle = key => setPlatforms(p => ({ ...p, [key]: !p[key] }));
+  const previewUrl = projectStatus?.output_urls?.preview;
 
   return <main className="page"><div className="shell">
-    <div className="top"><div className="brand"><h1>🎬 AI Video Factory</h1><p>Idea → Generate → Review → Approve → Publish</p></div><div className="badge">Implementation v0.3</div></div>
+    <div className="top"><div className="brand"><h1>🎬 AI Video Factory</h1><p>Idea → Generate → Review → Approve → Publish</p></div><div className="badge">Implementation v0.4 · Free GPU</div></div>
     <div className="grid">
       <section className="card"><h2>Create video</h2>
         <label>Video idea</label><textarea value={idea} onChange={e=>setIdea(e.target.value)} placeholder="What if scientists discovered advanced technology beneath the pyramids?" />
@@ -143,10 +146,14 @@ export default function Home() {
         </div>
         <button className="primary" disabled={loading} onClick={generate}>{loading?'Creating project…':'Generate Video'}</button>
         {result && <div className="result">{result}</div>}
+        {previewUrl && <div className="previewCard">
+          <div className="previewHead"><div><strong>{projectStatus.title || 'Generated video'}</strong><span>Real Kaggle GPU output · Ready for review</span></div><span className="readyPill">READY</span></div>
+          <video className="videoPreview" src={previewUrl} controls playsInline preload="metadata" />
+        </div>}
       </section>
       <aside className="card"><div className="status"><span className="dot"></span>Dashboard online</div><h2 style={{marginTop:18}}>Pipeline</h2><div className="steps">
         {pipeline.map((item,i)=><div className="step" key={item.key}><span>{item.label}</span><span className="value">{stageState(projectStatus.current_stage, projectStatus.status, item.key, i)}</span></div>)}
-      </div><p className="note">Worker connected. Live jobs are being claimed from Supabase and the dashboard is tracking their progress. Next: replace the simulated stages with the real AI generation modules.</p></aside>
+      </div><p className="note">Real generation now runs on Kaggle's free T4 GPU through GitHub Actions. Qwen directs the scenes, Kokoro generates voice, SDXL Turbo creates visuals, and FFmpeg renders the final platform formats. The free queue is checked automatically about every 5 minutes.</p></aside>
     </div>
   </div></main>
 }
