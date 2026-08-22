@@ -1,4 +1,3 @@
-import json
 import os
 import runpy
 import urllib.request
@@ -15,27 +14,10 @@ work = Path("/kaggle/working")
 work.mkdir(parents=True, exist_ok=True)
 (work / "job.json").write_text(EMBEDDED_JOB_JSON, encoding="utf-8")
 
-# The worker itself stays in GitHub. Intermediate images/clips are redirected
-# to /tmp so Kaggle only persists the final MP4, thumbnail and result JSON.
-worker_url = "https://raw.githubusercontent.com/ezz2020XC/ai-videos/main/kaggle_worker/run_job_v2.py"
+# v3 contains the cancellation-safe v2 patch plus preset/coverage speed logic.
+worker_url = "https://raw.githubusercontent.com/ezz2020XC/ai-videos/main/kaggle_worker/run_job_v3.py"
 source = urllib.request.urlopen(worker_url, timeout=60).read().decode("utf-8")
-source = source.replace(
-    "WORK = base.WORK",
-    'base.WORK = Path("/tmp/ai_video_factory")\nbase.WORK.mkdir(parents=True, exist_ok=True)\nWORK = base.WORK',
-    1,
-)
-# Keep a reference to the original base progress function before v2 monkey-patches it.
-source = source.replace(
-    "def progress(stage, percent, message):",
-    "_base_progress = base.progress\n\ndef progress(stage, percent, message):",
-    1,
-)
-source = source.replace(
-    "    base.progress(stage, percent, message)\n",
-    "    _base_progress(stage, percent, message)\n",
-    1,
-)
-worker_path = work / "run_job_v2.py"
+worker_path = work / "run_job_v3.py"
 worker_path.write_text(source, encoding="utf-8")
 
 os.chdir(work)
