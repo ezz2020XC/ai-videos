@@ -24,6 +24,17 @@ source = source.replace(
     'base.WORK = Path("/tmp/ai_video_factory")\nbase.WORK.mkdir(parents=True, exist_ok=True)\nWORK = base.WORK',
     1,
 )
+# Keep a reference to the original base progress function before v2 monkey-patches it.
+source = source.replace(
+    "def progress(stage, percent, message):",
+    "_base_progress = base.progress\n\ndef progress(stage, percent, message):",
+    1,
+)
+source = source.replace(
+    "    base.progress(stage, percent, message)\n",
+    "    _base_progress(stage, percent, message)\n",
+    1,
+)
 worker_path = work / "run_job_v2.py"
 worker_path.write_text(source, encoding="utf-8")
 
