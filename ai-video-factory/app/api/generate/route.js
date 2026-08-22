@@ -18,6 +18,7 @@ export async function POST(request) {
       );
     }
 
+    const musicVolume = Math.min(0.35, Math.max(0, Number(body.musicVolume ?? 0.14)));
     const projectPayload = {
       idea: body.idea.trim(),
       requested_duration: Math.max(Number(body.duration) || 30, 30),
@@ -25,6 +26,9 @@ export async function POST(request) {
       voice: body.voice || 'US Male',
       quality: body.quality || 'Full HD',
       platforms: body.platforms || {},
+      music_enabled: body.musicEnabled !== false,
+      music_mood: body.musicMood || 'cinematic',
+      music_volume: musicVolume,
       status: 'queued_gpu',
       progress: 0,
       current_stage: 'queued',
