@@ -12,7 +12,7 @@ const headers = {
 export async function GET() {
   try {
     const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/scheduled_posts?select=id,project_id,platform,scheduled_for,status,caption,external_post_id,error_message,created_at,projects(id,title,idea,output_urls)&order=scheduled_for.asc&limit=100`,
+      `${SUPABASE_URL}/rest/v1/scheduled_posts?select=id,project_id,platform,scheduled_for,status,caption,external_post_id,error_message,created_at,projects(id,title,idea,output_urls)&order=scheduled_for.asc&limit=250`,
       { headers, cache: 'no-store' }
     );
     const data = await res.json();
@@ -27,28 +27,60 @@ export async function GET() {
 export async function POST(request) {
   try {
     const body = await request.json();
-    const projectId = body.projectId;
+    const projectIds = [...new Set(
+      (Array.isArray(body.projectIds) ? body.projectIds : [body.projectId])
+        .map(value => String(value || '').trim())
+        .filter(Boolean)
+    )].slice(0, 50);
     const scheduledFor = body.scheduledFor;
     const platforms = Array.isArray(body.platforms) ? body.platforms : [];
-    const allowed = platforms.filter(p => ['youtube', 'instagram', 'tiktok'].includes(p));
+    const allowed = [...new Set(platforms.filter(p => ['youtube', 'instagram', 'tiktok'].includes(p)))];
+    const intervalMinutes = Math.max(0, Math.min(10080, Number(body.intervalMinutes || 0)));
 
-    if (!projectId || !scheduledFor || allowed.length === 0) {
-      return NextResponse.json({ error: 'Project, time and at least one platform are required.' }, { status: 400 });
+    if (projectIds.length === 0 || !scheduledFor || allowed.length === 0) {
+      return NextResponse.json({ error: 'At least one project, a start time and one platform are required.' }, { status: 400 });
     }
 
-    const date = new Date(scheduledFor);
-    if (Number.isNaN(date.getTime()) || date.getTime() <= Date.now()) {
+    const start = new Date(scheduledFor);
+    if (Number.isNaN(start.getTime()) || start.getTime() <= Date.now()) {
       return NextResponse.json({ error: 'Schedule time must be in the future.' }, { status: 400 });
     }
 
-    const rows = allowed.map(platform => ({
-      project_id: projectId,
-      platform,
-      scheduled_for: date.toISOString(),
-      status: 'scheduled',
-      caption: body.caption?.trim() || null,
-      metadata: {},
-    }));
+    const filter = projectIds.map(id => encodeURIComponent(id)).join(',');
+    const projectRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/projects?id=in.(${filter})&select=id,status,title,idea`,
+      { headers, cache: 'no-store' }
+    );
+    const projects = await projectRes.json();
+    if (!projectRes.ok) return NextResponse.json({ error: 'Could not validate selected videos.' }, { status: 500 });
+
+    const byId = new Map(projects.map(project => [project.id, project]));
+    const invalid = projectIds.filter(id => !byId.has(id) || byId.get(id).status !== 'ready_for_review');
+    if (invalid.length) {
+      return NextResponse.json({
+        error: 'Only videos that are ready for review can be scheduled.',
+        invalidProjectIds: invalid,
+      }, { status: 400 });
+    }
+
+    const rows = [];
+    projectIds.forEach((projectId, index) => {
+      const publishAt = new Date(start.getTime() + index * intervalMinutes * 60_000).toISOString();
+      allowed.forEach(platform => {
+        rows.push({
+          project_id: projectId,
+          platform,
+          scheduled_for: publishAt,
+          status: 'scheduled',
+          caption: body.caption?.trim() || null,
+          metadata: {
+            bulk: projectIds.length > 1,
+            sequence_index: index,
+            interval_minutes: intervalMinutes,
+          },
+        });
+      });
+    });
 
     const insert = await fetch(`${SUPABASE_URL}/rest/v1/scheduled_posts`, {
       method: 'POST',
@@ -58,16 +90,24 @@ export async function POST(request) {
     const data = await insert.json();
     if (!insert.ok) return NextResponse.json({ error: 'Could not create schedule', details: data }, { status: 500 });
 
-    await fetch(`${SUPABASE_URL}/rest/v1/projects?id=eq.${encodeURIComponent(projectId)}`, {
-      method: 'PATCH',
-      headers: { ...headers, Prefer: 'return=minimal' },
-      body: JSON.stringify({
-        scheduled_for: date.toISOString(),
-        publish_status: 'scheduled',
-      }),
-    });
+    await Promise.all(projectIds.map((projectId, index) => {
+      const publishAt = new Date(start.getTime() + index * intervalMinutes * 60_000).toISOString();
+      return fetch(`${SUPABASE_URL}/rest/v1/projects?id=eq.${encodeURIComponent(projectId)}`, {
+        method: 'PATCH',
+        headers: { ...headers, Prefer: 'return=minimal' },
+        body: JSON.stringify({
+          scheduled_for: publishAt,
+          publish_status: 'scheduled',
+        }),
+      });
+    }));
 
-    return NextResponse.json({ scheduled: data });
+    return NextResponse.json({
+      scheduled: data,
+      videos: projectIds.length,
+      posts: rows.length,
+      intervalMinutes,
+    });
   } catch (error) {
     console.error('Schedule POST error:', error);
     return NextResponse.json({ error: 'Unexpected server error' }, { status: 500 });
