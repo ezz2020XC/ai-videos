@@ -15,7 +15,7 @@ export async function GET(_request, { params }) {
     }
 
     const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/projects?id=eq.${encodeURIComponent(id)}&select=id,status,progress,current_stage,output_urls,error_message,updated_at`,
+      `${SUPABASE_URL}/rest/v1/projects?id=eq.${encodeURIComponent(id)}&select=id,title,status,progress,current_stage,output_urls,error_message,result_metadata,updated_at`,
       {
         headers: {
           apikey: SUPABASE_SECRET_KEY,
