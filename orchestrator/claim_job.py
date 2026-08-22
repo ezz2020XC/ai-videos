@@ -28,7 +28,7 @@ def github_output(name: str, value: str) -> None:
 def main() -> int:
     response = requests.get(
         f"{SUPABASE_URL}/rest/v1/projects"
-        "?status=eq.queued_gpu&select=*&order=created_at.asc&limit=1",
+        "?status=eq.queued_gpu&cancel_requested=eq.false&delete_requested=eq.false&select=*&order=created_at.asc&limit=1",
         headers=HEADERS,
         timeout=30,
     )
@@ -44,7 +44,7 @@ def main() -> int:
     project_id = candidate["id"]
 
     claim = requests.patch(
-        f"{SUPABASE_URL}/rest/v1/projects?id=eq.{project_id}&status=eq.queued_gpu",
+        f"{SUPABASE_URL}/rest/v1/projects?id=eq.{project_id}&status=eq.queued_gpu&cancel_requested=eq.false&delete_requested=eq.false",
         headers={**HEADERS, "Prefer": "return=representation"},
         json={
             "status": "processing",
@@ -58,7 +58,7 @@ def main() -> int:
     claimed = claim.json()
 
     if not claimed:
-        print("Job was claimed elsewhere; exiting cleanly.")
+        print("Job was claimed or cancelled elsewhere; exiting cleanly.")
         github_output("found", "false")
         return 0
 
@@ -83,7 +83,13 @@ def main() -> int:
             "stage": "orchestrator",
             "status": "claimed",
             "message": "GitHub Actions claimed the project for real Kaggle GPU generation",
-            "metadata": {"runner": "github-actions", "gpu_provider": "kaggle"},
+            "metadata": {
+                "runner": "github-actions",
+                "gpu_provider": "kaggle",
+                "generation_mode": project.get("generation_mode"),
+                "animation_engine": project.get("animation_engine"),
+                "batch_id": project.get("batch_id"),
+            },
         },
         timeout=30,
     ).raise_for_status()
