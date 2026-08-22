@@ -40,7 +40,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install --upgrade kaggle requests
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
           kaggle --version
+          ffmpeg -version | head -1
 
       - name: Validate required secrets
         shell: bash
@@ -133,6 +136,12 @@ jobs:
             --file-pattern '.*(result\.json|final_vertical\.mp4|final_landscape\.mp4|thumbnail\.jpg)$'
           echo 'Downloaded files:'
           find /tmp/kaggle-output -maxdepth 2 -type f -printf '%p %k KB\n'
+
+      - name: Add background music under voiceover
+        if: steps.claim.outputs.found == 'true'
+        env:
+          KAGGLE_OUTPUT_DIR: /tmp/kaggle-output
+        run: python orchestrator/add_music.py
 
       - name: Upload video to Supabase and mark ready for review
         if: steps.claim.outputs.found == 'true'
