@@ -28,7 +28,7 @@ def github_output(name: str, value: str) -> None:
 def main() -> int:
     response = requests.get(
         f"{SUPABASE_URL}/rest/v1/projects"
-        "?status=eq.queued&select=*&order=created_at.asc&limit=1",
+        "?status=eq.queued_gpu&select=*&order=created_at.asc&limit=1",
         headers=HEADERS,
         timeout=30,
     )
@@ -36,17 +36,15 @@ def main() -> int:
     rows = response.json()
 
     if not rows:
-        print("No queued AI Video Factory jobs.")
+        print("No queued Kaggle GPU jobs.")
         github_output("found", "false")
         return 0
 
     candidate = rows[0]
     project_id = candidate["id"]
 
-    # Claim only if it is still queued. Workflow-level concurrency keeps this
-    # single-consumer, while this filter protects against manual overlapping runs.
     claim = requests.patch(
-        f"{SUPABASE_URL}/rest/v1/projects?id=eq.{project_id}&status=eq.queued",
+        f"{SUPABASE_URL}/rest/v1/projects?id=eq.{project_id}&status=eq.queued_gpu",
         headers={**HEADERS, "Prefer": "return=representation"},
         json={
             "status": "processing",
@@ -84,7 +82,7 @@ def main() -> int:
             "project_id": project_id,
             "stage": "orchestrator",
             "status": "claimed",
-            "message": "GitHub Actions claimed the queued project for Kaggle GPU generation",
+            "message": "GitHub Actions claimed the project for real Kaggle GPU generation",
             "metadata": {"runner": "github-actions", "gpu_provider": "kaggle"},
         },
         timeout=30,
