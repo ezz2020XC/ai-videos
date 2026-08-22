@@ -7,7 +7,23 @@ from pathlib import Path
 
 V2_URL = "https://raw.githubusercontent.com/ezz2020XC/ai-videos/main/kaggle_worker/run_job_v2.py"
 V2_PATH = Path("/kaggle/working/run_job_v2_base.py")
-urllib.request.urlretrieve(V2_URL, V2_PATH)
+source = urllib.request.urlopen(V2_URL, timeout=60).read().decode("utf-8")
+source = source.replace(
+    "WORK = base.WORK",
+    'base.WORK = Path("/tmp/ai_video_factory")\nbase.WORK.mkdir(parents=True, exist_ok=True)\nWORK = base.WORK',
+    1,
+)
+source = source.replace(
+    "def progress(stage, percent, message):",
+    "_base_progress = base.progress\n\ndef progress(stage, percent, message):",
+    1,
+)
+source = source.replace(
+    "    base.progress(stage, percent, message)\n",
+    "    _base_progress(stage, percent, message)\n",
+    1,
+)
+V2_PATH.write_text(source, encoding="utf-8")
 
 spec = importlib.util.spec_from_file_location("ai_video_factory_v2", V2_PATH)
 v2 = importlib.util.module_from_spec(spec)
@@ -34,8 +50,6 @@ def selected_indices(scene_count):
     if coverage() == "minimal":
         return {0} if scene_count == 1 else {0, scene_count - 1}
 
-    # Balanced: keep enough true AI motion to feel alive without animating every
-    # scene on the free T4. Talking characters get one extra performance shot.
     picks = {0, scene_count // 2, scene_count - 1}
     if v2.mode() in {"talking_characters", "character_story"} and scene_count >= 5:
         picks.add(1)
@@ -50,11 +64,12 @@ def should_ai_animate(scene_index, scene_count):
     return scene_index in selected_indices(scene_count)
 
 
+_original_create_plan = v2.create_plan
+
+
 def create_plan():
-    plan = v2.create_plan()
+    plan = _original_create_plan()
     if preset() == "fast_preview" and isinstance(plan.get("scenes"), list) and len(plan["scenes"]) > 4:
-        # Four longer scenes are much faster than six/eight separate diffusion
-        # shots while still respecting the minimum 30-second final runtime.
         plan["scenes"] = plan["scenes"][:4]
         for idx, scene in enumerate(plan["scenes"], 1):
             scene["scene"] = idx
@@ -137,14 +152,11 @@ def animate_with_cogvideo(pipe, image_path, prompt, output_path, seed):
     export_to_video(result, str(output_path), fps=8)
 
 
-# Patch v2's module-level functions. Its main() resolves these names at runtime.
 v2.should_ai_animate = should_ai_animate
 v2.create_plan = create_plan
 v2.animate_with_wan = animate_with_wan
 v2.animate_with_cogvideo = animate_with_cogvideo
 
-# Fast Preview always renders the working composition at draft resolution first.
-# The dashboard clearly labels it as preview quality, while Balanced/Full remain HD.
 if preset() == "fast_preview":
     PROJECT["quality"] = "Fast Draft"
 
