@@ -18,8 +18,13 @@ work.mkdir(parents=True, exist_ok=True)
 # Keep the large worker implementation in GitHub so each run only injects the
 # non-secret project payload. Kaggle internet is enabled for this private job.
 worker_url = "https://raw.githubusercontent.com/ezz2020XC/ai-videos/main/kaggle_worker/run_job.py"
+source = urllib.request.urlopen(worker_url, timeout=60).read().decode("utf-8")
+source = source.replace(
+    'WORK = Path("/kaggle/working/ai_video_factory")',
+    'WORK = Path("/tmp/ai_video_factory")',
+)
 worker_path = work / "run_job.py"
-urllib.request.urlretrieve(worker_url, worker_path)
+worker_path.write_text(source, encoding="utf-8")
 
 os.chdir(work)
 runpy.run_path(str(worker_path), run_name="__main__")
