@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { buildSocialCopy } from '../../../lib/social-copy';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY;
@@ -12,7 +13,7 @@ const headers = {
 export async function GET() {
   try {
     const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/scheduled_posts?select=id,project_id,platform,scheduled_for,status,caption,external_post_id,error_message,created_at,projects(id,title,idea,output_urls)&order=scheduled_for.asc&limit=250`,
+      `${SUPABASE_URL}/rest/v1/scheduled_posts?select=id,project_id,platform,scheduled_for,status,caption,metadata,external_post_id,error_message,created_at,projects(id,title,idea,output_urls)&order=scheduled_for.asc&limit=250`,
       { headers, cache: 'no-store' }
     );
     const data = await res.json();
@@ -48,7 +49,7 @@ export async function POST(request) {
 
     const filter = projectIds.map(id => encodeURIComponent(id)).join(',');
     const projectRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/projects?id=in.(${filter})&select=id,status,title,idea`,
+      `${SUPABASE_URL}/rest/v1/projects?id=in.(${filter})&select=id,status,title,idea,style,generation_mode,caption_strategy,hashtag_strategy`,
       { headers, cache: 'no-store' }
     );
     const projects = await projectRes.json();
@@ -64,19 +65,35 @@ export async function POST(request) {
     }
 
     const rows = [];
+    const projectCopy = {};
     projectIds.forEach((projectId, index) => {
+      const project = byId.get(projectId);
       const publishAt = new Date(start.getTime() + index * intervalMinutes * 60_000).toISOString();
       allowed.forEach(platform => {
+        const platformOverride = body.captionsByPlatform?.[platform];
+        const copy = buildSocialCopy({
+          ...project,
+          platform,
+          generationMode: project.generation_mode,
+          strategy: body.captionStrategy || project.caption_strategy || 'auto',
+          hashtagStrategy: body.hashtagStrategy || project.hashtag_strategy || 'auto',
+        });
+        const caption = String(platformOverride || body.caption || '').trim() || copy.finalText;
+        projectCopy[platform] = copy;
+
         rows.push({
           project_id: projectId,
           platform,
           scheduled_for: publishAt,
           status: 'scheduled',
-          caption: body.caption?.trim() || null,
+          caption,
           metadata: {
             bulk: projectIds.length > 1,
             sequence_index: index,
             interval_minutes: intervalMinutes,
+            caption_strategy: copy.strategy,
+            hashtag_strategy: body.hashtagStrategy || project.hashtag_strategy || 'auto',
+            generated_copy: copy,
           },
         });
       });
@@ -98,6 +115,7 @@ export async function POST(request) {
         body: JSON.stringify({
           scheduled_for: publishAt,
           publish_status: 'scheduled',
+          social_copy: projectCopy,
         }),
       });
     }));
@@ -107,6 +125,7 @@ export async function POST(request) {
       videos: projectIds.length,
       posts: rows.length,
       intervalMinutes,
+      generatedCaptions: projectCopy,
     });
   } catch (error) {
     console.error('Schedule POST error:', error);
