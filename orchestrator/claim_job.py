@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
@@ -42,6 +43,7 @@ def main() -> int:
 
     candidate = rows[0]
     project_id = candidate["id"]
+    started_at = datetime.now(timezone.utc).isoformat()
 
     claim = requests.patch(
         f"{SUPABASE_URL}/rest/v1/projects?id=eq.{project_id}&status=eq.queued_gpu&cancel_requested=eq.false&delete_requested=eq.false",
@@ -50,6 +52,8 @@ def main() -> int:
             "status": "processing",
             "current_stage": "ai_director",
             "progress": 2,
+            "started_at": started_at,
+            "estimated_wait_seconds": 0,
             "error_message": None,
         },
         timeout=30,
@@ -88,6 +92,8 @@ def main() -> int:
                 "gpu_provider": "kaggle",
                 "generation_mode": project.get("generation_mode"),
                 "animation_engine": project.get("animation_engine"),
+                "generation_preset": project.get("generation_preset"),
+                "animation_coverage": project.get("animation_coverage"),
                 "batch_id": project.get("batch_id"),
             },
         },
