@@ -25,7 +25,7 @@ export async function POST(request) {
       voice: body.voice || 'US Male',
       quality: body.quality || 'Full HD',
       platforms: body.platforms || {},
-      status: 'queued',
+      status: 'queued_gpu',
       progress: 0,
       current_stage: 'queued',
       output_urls: {},
