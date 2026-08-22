@@ -2,6 +2,7 @@ import json
 import mimetypes
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
@@ -15,6 +16,7 @@ HEADERS = {
     "apikey": SUPABASE_SECRET_KEY,
     "Authorization": f"Bearer {SUPABASE_SECRET_KEY}",
 }
+JSON_HEADERS = {**HEADERS, "Content-Type": "application/json"}
 
 
 def upload_file(project_id: str, file_name: str) -> str:
@@ -39,6 +41,75 @@ def upload_file(project_id: str, file_name: str) -> str:
     return f"{SUPABASE_URL}/storage/v1/object/public/videos/{quote(object_path, safe='/')}"
 
 
+def load_current(project_id: str):
+    response = requests.get(
+        f"{SUPABASE_URL}/rest/v1/projects?id=eq.{project_id}&select=*",
+        headers=HEADERS,
+        timeout=30,
+    )
+    response.raise_for_status()
+    rows = response.json()
+    return rows[0] if rows else None
+
+
+def remove_assets(project_id: str):
+    prefixes = [
+        f"{project_id}/final_vertical.mp4",
+        f"{project_id}/final_landscape.mp4",
+        f"{project_id}/thumbnail.jpg",
+    ]
+    try:
+        response = requests.delete(
+            f"{SUPABASE_URL}/storage/v1/object/videos",
+            headers=JSON_HEADERS,
+            json={"prefixes": prefixes},
+            timeout=60,
+        )
+        if not response.ok:
+            print("Storage cleanup warning:", response.status_code, response.text[:400])
+    except Exception as exc:
+        print("Storage cleanup exception:", repr(exc))
+
+
+def delete_project(project_id: str):
+    remove_assets(project_id)
+    response = requests.delete(
+        f"{SUPABASE_URL}/rest/v1/projects?id=eq.{project_id}",
+        headers={**HEADERS, "Prefer": "return=minimal"},
+        timeout=30,
+    )
+    response.raise_for_status()
+    print(f"Deleted project {project_id} after worker shutdown.")
+
+
+def mark_cancelled(project_id: str, message: str):
+    response = requests.patch(
+        f"{SUPABASE_URL}/rest/v1/projects?id=eq.{project_id}",
+        headers={**JSON_HEADERS, "Prefer": "return=minimal"},
+        json={
+            "status": "cancelled",
+            "current_stage": "cancelled",
+            "cancel_requested": True,
+            "cancelled_at": datetime.now(timezone.utc).isoformat(),
+            "error_message": None,
+        },
+        timeout=30,
+    )
+    response.raise_for_status()
+    requests.post(
+        f"{SUPABASE_URL}/rest/v1/job_events",
+        headers={**JSON_HEADERS, "Prefer": "return=minimal"},
+        json={
+            "project_id": project_id,
+            "stage": "control",
+            "status": "cancelled",
+            "message": message,
+            "metadata": {},
+        },
+        timeout=30,
+    ).raise_for_status()
+
+
 def main() -> int:
     result_path = OUTPUT_DIR / "result.json"
     if not result_path.exists():
@@ -46,9 +117,22 @@ def main() -> int:
 
     result = json.loads(result_path.read_text(encoding="utf-8"))
     project_id = result["project_id"]
-    project = result["project"]
-    generated = result.get("outputs", {})
+    embedded_project = result.get("project") or {}
+    current = load_current(project_id)
 
+    if not current:
+        print(f"Project {project_id} no longer exists; nothing to finalize.")
+        return 0
+
+    if current.get("delete_requested") or result.get("delete_requested"):
+        delete_project(project_id)
+        return 0
+
+    if current.get("cancel_requested") or result.get("cancelled"):
+        mark_cancelled(project_id, result.get("cancel_reason") or "Generation stopped by user.")
+        return 0
+
+    generated = result.get("outputs", {})
     urls = {}
     vertical_url = None
     landscape_url = None
@@ -60,7 +144,7 @@ def main() -> int:
     if generated.get("thumbnail"):
         urls["thumbnail"] = upload_file(project_id, generated["thumbnail"])
 
-    platforms = project.get("platforms") or {}
+    platforms = current.get("platforms") or embedded_project.get("platforms") or {}
     if vertical_url:
         urls["preview"] = vertical_url
         if platforms.get("reels"):
@@ -76,11 +160,7 @@ def main() -> int:
 
     patch = requests.patch(
         f"{SUPABASE_URL}/rest/v1/projects?id=eq.{project_id}",
-        headers={
-            **HEADERS,
-            "Content-Type": "application/json",
-            "Prefer": "return=minimal",
-        },
+        headers={**JSON_HEADERS, "Prefer": "return=minimal"},
         json={
             "status": "ready_for_review",
             "current_stage": "approval",
@@ -98,11 +178,7 @@ def main() -> int:
 
     requests.post(
         f"{SUPABASE_URL}/rest/v1/job_events",
-        headers={
-            **HEADERS,
-            "Content-Type": "application/json",
-            "Prefer": "return=minimal",
-        },
+        headers={**JSON_HEADERS, "Prefer": "return=minimal"},
         json={
             "project_id": project_id,
             "stage": "approval",
