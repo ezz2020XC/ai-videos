@@ -65,10 +65,12 @@ export async function POST(request) {
     }
 
     const rows = [];
-    const projectCopy = {};
+    const copyByProject = {};
     projectIds.forEach((projectId, index) => {
       const project = byId.get(projectId);
       const publishAt = new Date(start.getTime() + index * intervalMinutes * 60_000).toISOString();
+      copyByProject[projectId] = {};
+
       allowed.forEach(platform => {
         const platformOverride = body.captionsByPlatform?.[platform];
         const copy = buildSocialCopy({
@@ -79,7 +81,7 @@ export async function POST(request) {
           hashtagStrategy: body.hashtagStrategy || project.hashtag_strategy || 'auto',
         });
         const caption = String(platformOverride || body.caption || '').trim() || copy.finalText;
-        projectCopy[platform] = copy;
+        copyByProject[projectId][platform] = copy;
 
         rows.push({
           project_id: projectId,
@@ -115,7 +117,7 @@ export async function POST(request) {
         body: JSON.stringify({
           scheduled_for: publishAt,
           publish_status: 'scheduled',
-          social_copy: projectCopy,
+          social_copy: copyByProject[projectId] || {},
         }),
       });
     }));
@@ -125,7 +127,7 @@ export async function POST(request) {
       videos: projectIds.length,
       posts: rows.length,
       intervalMinutes,
-      generatedCaptions: projectCopy,
+      generatedCaptions: copyByProject,
     });
   } catch (error) {
     console.error('Schedule POST error:', error);
