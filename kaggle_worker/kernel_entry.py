@@ -15,15 +15,16 @@ work = Path("/kaggle/working")
 work.mkdir(parents=True, exist_ok=True)
 (work / "job.json").write_text(EMBEDDED_JOB_JSON, encoding="utf-8")
 
-# Keep the large worker implementation in GitHub so each run only injects the
-# non-secret project payload. Kaggle internet is enabled for this private job.
-worker_url = "https://raw.githubusercontent.com/ezz2020XC/ai-videos/main/kaggle_worker/run_job.py"
+# The worker itself stays in GitHub. Intermediate images/clips are redirected
+# to /tmp so Kaggle only persists the final MP4, thumbnail and result JSON.
+worker_url = "https://raw.githubusercontent.com/ezz2020XC/ai-videos/main/kaggle_worker/run_job_v2.py"
 source = urllib.request.urlopen(worker_url, timeout=60).read().decode("utf-8")
 source = source.replace(
-    'WORK = Path("/kaggle/working/ai_video_factory")',
-    'WORK = Path("/tmp/ai_video_factory")',
+    "WORK = base.WORK",
+    'base.WORK = Path("/tmp/ai_video_factory")\nbase.WORK.mkdir(parents=True, exist_ok=True)\nWORK = base.WORK',
+    1,
 )
-worker_path = work / "run_job.py"
+worker_path = work / "run_job_v2.py"
 worker_path.write_text(source, encoding="utf-8")
 
 os.chdir(work)
